@@ -1,0 +1,2 @@
+timestamp,program_name,processing_time_ms,cpu_percent,memory_usage_mb
+2025-04-21 21:52:56,IPL_RunRate_Analysis_Batch,8194.267749786377,25.2,48.9140625

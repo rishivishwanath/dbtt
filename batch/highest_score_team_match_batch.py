@@ -1,5 +1,57 @@
 from pyspark.sql import SparkSession
 import logging
+import time
+import os
+import csv
+import psutil
+import datetime
+import atexit
+
+# Create logs directory if it doesn't exist
+log_dir = "performance_logs"
+os.makedirs(log_dir, exist_ok=True)
+
+# Initialize performance logger
+batch_log_file = os.path.join(log_dir, "highest_score_batch_match_log.csv")
+
+# Create/open the log file with headers if it doesn't exist
+if not os.path.exists(batch_log_file):
+    with open(batch_log_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['timestamp', 'program_name', 'processing_time_ms', 
+                         'cpu_percent', 'memory_usage_mb'])
+
+# Start time
+start_time = time.time()
+
+# Function to log performance at program exit
+def log_performance_on_exit():
+    # Get end time
+    end_time = time.time()
+    elapsed_time = (end_time - start_time) * 1000  # ms
+    
+    # Get CPU and memory usage
+    cpu_percent = psutil.cpu_percent()
+    memory_usage = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)  # MB
+    
+    # Write a single log entry for the entire program
+    with open(batch_log_file, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "IPL_Highest_Scorers_Batch",
+            elapsed_time,
+            cpu_percent,
+            memory_usage
+        ])
+    
+    print(f"\nProgram Performance Log:")
+    print(f"Total execution time: {elapsed_time:.2f} ms")
+    print(f"CPU usage: {cpu_percent}%")
+    print(f"Memory usage: {memory_usage:.2f} MB")
+
+# Register the function to run at exit
+atexit.register(log_performance_on_exit)
 
 # Suppress specific warnings
 logging.getLogger("org.apache.spark.sql.execution").setLevel(logging.ERROR)
@@ -27,29 +79,6 @@ df_raw = spark.read.jdbc(url=jdbc_url, table=table_name, properties=properties)
 
 # Register temp view for Spark SQL
 df_raw.createOrReplaceTempView("runs_data")
-
-# =====================================
-# 1. Calculate basic player scoring stats - All player scores
-# =====================================
-query1 = """
-SELECT 
-    match_id,
-    batting_team,
-    innings,
-    striker,
-    SUM(CAST(runs_of_bat AS INT)) AS total_runs
-FROM 
-    runs_data
-GROUP BY 
-    match_id, batting_team, innings, striker
-ORDER BY 
-    match_id, batting_team, innings, total_runs DESC
-"""
-
-all_player_scores = spark.sql(query1)
-
-print("\n===== ALL PLAYER SCORES =====")
-all_player_scores.show(20, truncate=False)
 
 # =====================================
 # 2. Find top scorers by match/innings/team using SQL
@@ -102,71 +131,6 @@ top_scorers = spark.sql(query2)
 print("\n===== TOP SCORERS BY MATCH/INNINGS/TEAM =====")
 top_scorers.show(50, truncate=False)
 
-# =====================================
-# 3. Overall highest run scorers across all matches
-# =====================================
-query3 = """
-SELECT 
-    striker,
-    batting_team,
-    SUM(CAST(runs_of_bat AS INT)) AS total_runs
-FROM 
-    runs_data
-GROUP BY 
-    striker, batting_team
-ORDER BY 
-    total_runs DESC
-"""
-
-highest_overall_scorers = spark.sql(query3)
-
-print("\n===== HIGHEST OVERALL SCORERS =====")
-highest_overall_scorers.show(20, truncate=False)
-
-# =====================================
-# 4. Highest scorers by match
-# =====================================
-query4 = """
-WITH player_match_scores AS (
-    SELECT 
-        match_id,
-        striker,
-        batting_team,
-        SUM(CAST(runs_of_bat AS INT)) AS match_total
-    FROM 
-        runs_data
-    GROUP BY 
-        match_id, striker, batting_team
-),
-max_match_scores AS (
-    SELECT 
-        match_id,
-        MAX(match_total) AS max_score
-    FROM 
-        player_match_scores
-    GROUP BY 
-        match_id
-)
-SELECT 
-    pms.match_id,
-    pms.striker,
-    pms.batting_team,
-    pms.match_total AS highest_score
-FROM 
-    player_match_scores pms
-JOIN 
-    max_match_scores mms
-ON 
-    pms.match_id = mms.match_id AND
-    pms.match_total = mms.max_score
-ORDER BY 
-    pms.match_id
-"""
-
-highest_match_scorers = spark.sql(query4)
-
-print("\n===== HIGHEST SCORERS BY MATCH =====")
-highest_match_scorers.show(50, truncate=False)
 
 # Stop the Spark session
 spark.stop()
